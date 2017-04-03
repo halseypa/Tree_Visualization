@@ -1,0 +1,1030 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+
+    <title>ML Tree</title>
+
+    <style>
+	
+	svg, img, canvas {
+	display: block;
+	}
+	
+	.node circle {
+	  fill: #fff;
+	  stroke: steelblue;
+	  stroke-width: 3px;
+	}
+
+	.node text { font: 12px sans-serif; }
+
+	.link {
+	  fill: none;
+	  stroke: #ccc;
+	  stroke-width: 2px;
+	}
+	
+    </style>
+
+  </head>
+
+	<body onload="pollData()">
+		<svg id="graph" style="height: 380px; width: 550px;"></svg>
+
+<!-- load the d3.js library -->	
+<script src="d3.min.js"></script>
+<script src="jquery.min.js"></script>
+<script src="jquery-ui.min.js"></script>
+<!-- <script src="mlTree_Gen.js"></script>-->
+
+<script>
+var data;
+var accuracy_1;
+var trialNum;
+var mlTrialOffset = 2
+var previousTrialNum = 2
+//window.alert("starting script");
+
+
+function outcomeFormat(data){
+	var dataArray = [];
+	
+	for(var i = 0; i < data.length; i++){
+		var splitData = data[i].split('\t');
+		//console.log("split data: " + splitData);
+		dataArray[i] = splitData[1];
+	}
+	console.log("final array: " + dataArray);
+	return dataArray;
+}
+
+
+function compareOutcomes(envOutcomeArray, mlOutcomeArray){
+	if (mlOutcomeArray.length <10){
+		var startVal = 0;
+	}
+	else {
+		var startVal = mlOutcomeArray.length-10;
+	}
+	var outcomes = [];
+	
+	console.log("start value: " + startVal)
+	console.log("mlOutcome: " + mlOutcomeArray);
+	console.log("envOutcome: " + envOutcomeArray);
+	
+	var index = 0;
+	for (var i = startVal; i < mlOutcomeArray.length; i++){
+		console.log("mlOutcome: " + mlOutcomeArray[i]);
+		console.log("envOutcome: " + envOutcomeArray[i]);
+		
+		if (mlOutcomeArray[i] == envOutcomeArray[i]){
+			outcomes[index] = 1;
+		}
+		else {
+			outcomes[index] = 0;
+		}
+		index = index + 1;
+	}//end of for loop
+	console.log("outcomes: " + outcomes);
+	return outcomes;
+}//end of compareOutcomes
+
+
+function eliminateNulls(data){
+	var currentTrial = data[data.length-1].split('\t');
+	if (currentTrial[1] == "null"){
+		data.splice(data.length-1, 1);
+		eliminateNulls(data);
+	}
+	else { return data;	}
+}//end of eliminateNulls
+
+
+//format the data and grabs a window of data
+function formatData(data){
+	var window = 5;
+	var newArray = [];	
+	
+	//TODO
+	//These values are also hardcoded for data set size at the moment, they'll need to change
+	
+	if (data.length < 266){
+		data.splice(data.length-2, 2);		
+	}
+	else if (data.length == 266){
+		data.splice(data.length-1, 1);
+	}
+	else { data = data; }
+	
+	if(data.length < window){		
+		for (var i = 0; i < data.length; i++){
+			var currentTrial = data[i];
+			newArray[i] = currentTrial[1];
+		}
+	}
+	else {
+		var windowStart = data.length - window;
+
+		for (var i = 0; i <= window; i++){
+			var currentTrial = data[windowStart+i];
+			newArray[i] = currentTrial;
+		}
+	}
+	
+	var subSet = [];
+	for (var i = 0; i < newArray.length-1; i++){
+		gimmeData = newArray[i].split('\t');
+		subSet[i] = gimmeData[1];
+	}
+	return subSet;
+}//end of formatData
+
+
+function linearRegression(y){
+	var lr = {};
+	var sum_x = 0;
+	var sum_y = 0;
+	var sum_xy = 0;
+	var sum_xx = 0;
+	var sum_yy = 0;
+	var threshold = 0.90;
+	var average = 0;
+	var x = [];
+	
+	for (var i = 0; i < y.length; i++){
+		x[i] = i+1;
+	}
+	var n = y.length;
+	
+	for (var i = 0; i < y.length; i++) {
+
+		sum_x += parseFloat(x[i]);
+		sum_y += parseFloat(y[i]);
+		sum_xy += parseFloat((x[i]*y[i]));
+		sum_xx += parseFloat((x[i]*x[i]));
+		sum_yy += parseFloat((y[i]*y[i]));
+	}
+	average = sum_y/n;
+
+	lr['slope'] = (n * sum_xy - sum_x * sum_y) / (n*sum_xx - sum_x * sum_x);
+	lr['intercept'] = (sum_y - lr.slope * sum_x)/n;
+	lr['r2'] = Math.pow((n*sum_xy - sum_x*sum_y)/Math.sqrt((n*sum_xx-sum_x*sum_x)*(n*sum_yy-sum_y*sum_y)),2);
+	lr['average'] = average;
+
+	//is the ML stable enough to provide instruction?
+	//  with a window size of 10, +/-0.13 is equivalent to 3 incorrect responses. Basically if the ML
+	// is less than 70% correct, it ain't givin it
+	if ((lr.slope < 0.13) && (lr.slope > -0.13)){
+		giveInstruction = "True";
+		console.log("within linearReg, it is true");
+	} else { giveInstruction = "False"; console.log("within linearReg, it is true");}
+
+	//these two stats are useless for human data
+	lr['threshold'] = average*threshold; //computes the threshold for which the ML should intervene given other conditions as well
+	lr['giveInstruction'] = giveInstruction;
+
+	return lr;
+} //end of linear regression
+
+
+// need to generalize some of the names later on for both types (human/ml)
+function determineStats(x){
+	var lastWindow, dataSize;
+	var linearXdata = [];
+	//checks if data is available for computation; if not, does not provide instruction
+	if(x != []){
+		stats = linearRegression(x);
+		console.log("instruction in true? " + stats.giveInstruction)
+		return stats;
+	}
+	else{
+		stats["giveInstruction"] = "True";
+		console.log("instruction in false? " + stats.giveInstruction)
+		return stats;
+	}
+}//end of determineStats
+
+
+function getHumanTree() {
+	//code that will grab data from each column, e.g, "Human_Env_cueCheck1" and the associated value, "featureX"
+	//need code that uses the cue checked in "cueCheckX" to look up the particular section
+	//e.g, humanData = getData("featureX")
+
+	var array = [];
+	var test = [];
+  	var giveInstruction = "False";
+
+	//what is the first cue checked?
+	var cueCheck1 = getData("Human_Env_cueCheck1");
+	console.log("Env_cueCheck1 after pull " + cueCheck1);
+	var lines = cueCheck1.trim().replace(/_/g, " ").split('\n');
+	var header_line = lines[0];
+	var headers = header_line.split('\t');
+	console.log("most recent data: "+ lines[lines.length - 3])
+	var mostRecentAccuracy = lines[lines.length - 3];
+	var recent_cueCheck1 = mostRecentAccuracy.split('\t');
+	console.log("Env_cueCheck1 " + recent_cueCheck1[1]);
+	
+  	if (recent_cueCheck1[1] != "None"){
+		//what is the value of the first cue checked?
+		var cueCheckVal1 = getData(String(recent_cueCheck1[1]));
+		console.log("Env_cueCheck1 after pull " + cueCheck1);
+		var lines = cueCheckVal1.trim().replace(/_/g, " ").split('\n');
+		var header_line = lines[0];
+		var headers = header_line.split('\t');
+		var mostRecentAccuracy = lines[lines.length - 3];
+		var recent_cueCheckVal1 = mostRecentAccuracy.split('\t');
+		console.log("Env_cue1Val " + recent_cueCheckVal1[1]);
+  	}
+  	else {
+		var cueCheckVal1 = getData("feature1");
+		console.log("Env_cueCheck1 after pull " + cueCheck1);
+		var lines = cueCheckVal1.trim().replace(/_/g, " ").split('\n');
+		var header_line = lines[0];
+		var headers = header_line.split('\t');
+		var mostRecentAccuracy = lines[lines.length - 3];
+		var recent_cueCheckVal1 = mostRecentAccuracy.split('\t');
+		console.log("Env_cue1Val " + recent_cueCheckVal1[1]);
+  	};
+  	
+	//what is the second cue checked?
+	var cueCheck2 = getData("Human_Env_cueCheck2");
+	console.log("Env_cueCheck1 after pull " + cueCheck2);
+	var lines = cueCheck2.trim().replace(/_/g, " ").split('\n');
+	var header_line = lines[0];
+	var headers = header_line.split('\t');
+	console.log("most recent data: "+ lines[lines.length - 3])
+	var mostRecentAccuracy = lines[lines.length - 3];
+	var recent_cueCheck2 = mostRecentAccuracy.split('\t');
+	console.log("Env_cueCheck2 " + recent_cueCheck2[1]);
+	
+  	if (recent_cueCheck2[1] != "None"){
+		//what is the value of the second cue checked?
+		var cueCheckVal2 = getData(String(recent_cueCheck2[1]));
+		console.log("Env_cueCheck1 after pull " + cueCheckVal2);
+		var lines = cueCheckVal2.trim().replace(/_/g, " ").split('\n');
+		var header_line = lines[0];
+		var headers = header_line.split('\t');
+		var mostRecentAccuracy = lines[lines.length - 3];
+		var recent_cueCheckVal2 = mostRecentAccuracy.split('\t');
+		console.log("Env_cue2Val " + recent_cueCheckVal2[1]);
+  	}
+  	else {
+		var cueCheckVal2 = getData("feature2");
+		console.log("Env_cueCheck1 after pull " + cueCheck2);
+		var lines = cueCheckVal2.trim().replace(/_/g, " ").split('\n');
+		var header_line = lines[0];
+		var headers = header_line.split('\t');
+		var mostRecentAccuracy = lines[lines.length - 3];
+		var recent_cueCheckVal2 = mostRecentAccuracy.split('\t');
+		console.log("Env_cue2Val " + recent_cueCheckVal2[1]);
+  	};
+	
+	//what is the third cue checked?
+	var cueCheck3 = getData("Human_Env_cueCheck3");
+	console.log("Env_cueCheck1 after pull " + cueCheck3);
+	var lines = cueCheck3.trim().replace(/_/g, " ").split('\n');
+	var header_line = lines[0];
+	var headers = header_line.split('\t');
+	console.log("most recent data: "+ lines[lines.length - 3])
+	var mostRecentAccuracy = lines[lines.length - 3];
+	var recent_cueCheck3 = mostRecentAccuracy.split('\t');
+	console.log("Env_cueCheck3 " + recent_cueCheck3[1]);
+	
+  	if (recent_cueCheck3[1] != "None"){
+		//what is the value of the third cue checked?
+		var cueCheckVal3 = getData(String(recent_cueCheck3[1]));
+		console.log("Env_cueCheck1 after pull " + cueCheckVal2);
+		var lines = cueCheckVal2.trim().replace(/_/g, " ").split('\n');
+		var header_line = lines[0];
+		var headers = header_line.split('\t');
+		var mostRecentAccuracy = lines[lines.length - 3];
+		var recent_cueCheckVal3 = mostRecentAccuracy.split('\t');
+		console.log("Env_cue3Val " + recent_cueCheckVal3[1]);
+  	}
+  	else {
+		var cueCheckVal3 = getData("feature1");
+		console.log("Env_cueCheck1 after pull " + cueCheck3);
+		var lines = cueCheckVal3.trim().replace(/_/g, " ").split('\n');
+		var header_line = lines[0];
+		var headers = header_line.split('\t');
+		var mostRecentAccuracy = lines[lines.length - 3];
+		var recent_cueCheckVal3 = mostRecentAccuracy.split('\t');
+		console.log("Env_cue1Val " + recent_cueCheckVal3[1]);
+  	};
+  	
+  	//get human outcome
+  	var humOutcome = getData("Human_Env_outcome");
+	console.log("Env_cueCheck1 after pull " + humOutcome);
+	var lines = humOutcome.trim().replace(/_/g, " ").split('\n');
+	var header_line = lines[0];
+	var headers = header_line.split('\t');
+	console.log("most recent data: "+ lines[lines.length - 3])
+	var recentHumOutcome = lines[lines.length - 3];
+	var recent_humOutcome = recentHumOutcome.split('\t');
+	console.log("human outcome: " + recent_humOutcome);
+  	
+	array = [ recent_cueCheck1[1], recent_cueCheckVal1[1], recent_cueCheck2[1], recent_cueCheckVal2[1], recent_cueCheck3[1], recent_cueCheckVal3[1]];
+	console.log("here's the real array of data selected: " + array);
+  	
+  	//array = ["feature3", "1"];
+  	
+  	console.log("The completed data array: " + array);
+
+	if (array[4] == "None"){
+		array.splice(5, 1);
+		array.splice(4, 1);
+		array[3] = recent_humOutcome[1];
+	}
+	if (array[2] == "None"){
+		array.splice(3, 1);
+		array.splice(2, 1);
+		array[1] = recent_humOutcome[1];
+	}
+	
+	console.log("array after getting sliced up: " + array);
+
+	//will return current ML tree in array format
+	var MLtreeComponents = updateFFTs(getData("ML_Env_newtree"), "generic");
+	var featureLabels = MLtreeComponents[0];
+	var featureVals = MLtreeComponents[1];
+	var instructResponses = []; //to hold values to determine if instruction should be given
+	var MLtreeData, mlTreeCondensed;
+	//var j = 0;
+	
+	console.log("ML tree after being grabbed, using generic names prior to split " + MLtreeComponents[2]);
+	var test = MLtreeComponents[2];
+	var outcomes = MLtreeComponents[3];
+	
+	mlTreeCondensed = MLtreeComponents[2];
+	console.log("here's all the different tree pathways coming across: " + mlTreeCondensed[0]);
+	
+	//cycles through all possible pathways, to determine if the human is following one of those
+	//if they're following none of the pathways, then provide instruction
+	for (var j=0; j < mlTreeCondensed.length; j++){
+		console.log("run number: " + j);
+		MLtreeData = mlTreeCondensed[j].split(","); //grabs one of the possible tree paths, e.g. "feature1, 0"
+		
+		console.log("here's what the ML tree is with the generic names: " + MLtreeData);
+		console.log("heres the human tree: " + array);
+
+		console.log("ML Length: " + MLtreeData.length);
+		console.log("array length: " + array.length);
+		
+		if((MLtreeData[0] == "None")&&((MLtreeData[1] == "1")||(MLtreeData[1] == "0"))){
+			if ((array[0] == "None")&&((array[1] == "1")||(array[1] == "0"))) {
+				console.log("the size of the arrays match, so no instruction");
+				instructResponses[j] = "False";
+				//return giveInstruction;
+			}
+		}//end of if, to determine if CCU or NUR should be chosen
+		else if(MLtreeData.length != array.length){		
+			instructResponses[j] = "True";
+	    	//return giveInstruction;
+		}
+		else{
+			//loops through the ML and Human features to check for matches in the path, assuming length is the same
+			console.log("length is the same");
+			for(var i=0; i < MLtreeData.length; i++){
+				MLtreeData[i] = MLtreeData[i].replace(/ /g, "");
+				array[i] = array[i].replace(/ /g, "");
+				console.log("The current compared are: ML - " + MLtreeData[i] + " and the Human - " + array[i]);
+				if((MLtreeData[i] == array[i])&&(instructResponses[j] != "True")){
+					console.log("These values are equal and instruction isn't given");
+					instructResponses[j] = "False";
+				}//end of if
+				else{
+					console.log("These values are different and instruction should be given");
+					instructResponses[j] = "True";
+					//return giveInstruction;
+				}//end of else (if)
+			};//end of for comparing each part of the ML path to each part of the Human path
+		}//end of else
+	}//end of for loop that goes through FFT pathways
+	console.log("here's the final array with all the pathway comparisons " + instructResponses);
+	console.log("all  the outcomes: " + outcomes);
+	console.log("recent human outcome: " + recent_humOutcome);
+	
+	//checks to see if any of the pathways matched human response
+	//Returns that instruction shouldnt be given if a false is found
+	for(var i = 0; i < instructResponses.length; i++){
+		//if ((String(instructResponses[i]) =="False")&&(String(recent_humOutcome[1]) == String(outcomes[i]))){
+		if (String(instructResponses[i]) =="False"){
+			//console.log("current ML instruction response: " + outcomes[i] + ", " + "human response: " + recent_humOutcome[1]);
+			console.log("Instruction should not be given");
+			return giveInstruction = "False";
+		}
+		else {
+			//console.log("current ML instruction response: " + outcomes[i] + ", " + "human response: " + recent_humOutcome[1]);
+			console.log("Give instruction!");
+			giveInstruction = "True";
+		}
+	}
+	return giveInstruction;
+}
+
+function pollData() {
+	//var featureArray = [];
+	var treebuild;
+	//rawTreeData = getData("ML_Env_newtree");
+	//console.log("rawTreeData: " + rawTreeData[0]);
+	//featureArray = updateFFTs(rawTreeData[0], "names"); //"ML_Env_newtree"
+	
+	featureArray = updateFFTs(getData("ML_Env_newtree"), "names");
+	featureArray = featureArray[0];
+	console.log("here's the tree data: " + featureArray[0]);
+
+	//this block of code displays the accuracy on-screen
+	//needs to be formatted correctly if used in conjunction with on-screen human instruction
+	/*
+	var accuracy = getData("ML_Env_accuracy");
+	var lines = accuracy.trim().replace(/_/g, " ").split('\n');
+	var header_line = lines[0];
+	var headers = header_line.split('\t');
+	var mostRecentAccuracy = lines[lines.length - 1];
+	var mostRecentAccuracy_Append = mostRecentAccuracy.split('\t');
+	accuracy_1 = mostRecentAccuracy_Append[1]*100;
+	accuracy_1 = Math.round(accuracy_1*100)/100;
+	*/
+
+	//grabs data (in this case accuracy) in order to determine stability for the ML and to determine direction of human performance
+	humStatsArray = getData("Human_Env_accuracy");
+	mlStatsArray = getData("ML_Env_accuracy");
+	
+	console.log("hum stats " + humStatsArray);
+	console.log("ml stats " + mlStatsArray);
+	
+	envOutcome = getData("Environment_outcome");
+	mlOutcome = getData("ML_Env_outcome");
+	
+	console.log("env outcome " + envOutcome);
+	console.log("ml outcome " + mlOutcome);
+	
+	var humLines = humStatsArray.trim().replace(/_/g, " ").split('\n');
+	var mlLines = mlStatsArray.trim().replace(/_/g, " ").split('\n');
+	
+	var envOutcomeArray = envOutcome.trim().replace(/_/g, " ").split('\n');
+	var mlOutcomeArray = mlOutcome.trim().replace(/_/g, " ").split('\n');
+	
+	humLines.shift();
+	mlLines.shift();
+		
+	envOutcomeArray.shift();
+	mlOutcomeArray.shift();
+	
+	envOutcomeArray = outcomeFormat(envOutcomeArray);
+	mlOutcomeArray = outcomeFormat(mlOutcomeArray);
+	
+	numberOfHits = compareOutcomes(envOutcomeArray, mlOutcomeArray)
+	console.log("number of hits" + numberOfHits);
+	mlSteady = linearRegression(numberOfHits);
+	
+	console.log("mlstady give instruction: " + mlSteady.giveInstruction);
+	trialNum = mlLines.length;
+	
+	//Comment these out for testing
+	humStatsArray = formatData(humLines);
+	mlStatsArray = formatData(mlLines);
+	
+	console.log("human data: " + humStatsArray);
+	console.log("ml data: " + mlStatsArray);
+	//processes the accuracy of both the ML and the Hum data and return statistics to be used
+	humStats = determineStats(humStatsArray);
+	mlStats = determineStats(mlStatsArray);
+	
+	console.log("what's the human slope? " + humStats.slope);
+	console.log("is the ML stable? " + mlStats.giveInstruction);
+	
+	///grabs the tree data from the human and compares it against the ML
+	giveInstruction = getHumanTree();
+	console.log("What is the final assement? Should instruction be given? " + giveInstruction);
+	//console.log("mlStats give instruction " + mlStats.giveInstruction);
+	
+	console.log("featureArray: " + featureArray);
+	
+	if ((giveInstruction == "True")&&(mlSteady.giveInstruction == "True")){
+		treebuild = [];
+		treebuild = treeConstructor(featureArray);
+		
+		setTimeout(function(){ buildTree(); }, 1000);
+	}
+	else {
+		treebuild = [];
+	}
+	buildTree(treebuild);
+}
+
+function treeConstructor(featureArray) {
+	//window.alert(featureArray)
+	//window.alert(featureArray);
+	if (featureArray.length == 3) {
+		if (isNaN(featureArray[1])) {
+			if(isNaN(featureArray[2])) {
+				//                   O
+				//					/ \
+				//                 O
+				//                / \
+				//               O
+				//              / \
+				var data = [
+			    		 { "name": String(featureArray[0]), "rule":"null", "children": [
+								{"name": String(featureArray[1]), "rule": "Yes", "children": [
+		    		                  		{"name": String(featureArray[2]), "rule": "Yes", "children": [
+		    		                  		     {"name": "CCU", "rule": "Yes"}, {"name": "Nurse's Bed", "rule": "No"}]},
+		    		                  		{"name": "Nurse's Bed", "rule": "No"}]},
+			    		    	{"name": "Nurse's Bed", "rule": "No"}]}]
+				
+			} else {
+				//                   O
+				//					/ \
+				//                 O
+				//                / \
+				//                   O
+				//                  / \
+				var data = [
+			    		 { "name": String(featureArray[0]), "rule":"null", "children": [
+								{"name": String(featureArray[1]), "rule": "Yes", "children": [
+		    		                  		{"name": "CCU", "rule": "Yes"},
+		    		                  		{"name": String(featureArray[2]), "rule": "No", "children": [
+													{"name": "CCU", "rule": "Yes"}, {"name": "Nurse's Bed", "rule": "No"}]}]},
+			    		    	{"name": "Nurse's Bed", "rule": "No"}]}]
+			}//end of check
+		} else {
+			if(isNaN(featureArray[2])) {
+				//                   O
+				//					/ \
+				//                	   O
+				//                    / \
+				//                   O
+				//                  / \
+				var data = [
+			    		 	{ "name": String(featureArray[0]), "rule":"null", "children": [
+								{"name": "CCU", "rule": "Yes"},
+			    		    	{"name": String(featureArray[1]), "rule": "No", "children": [ 
+			    		    	    	{"name": String(featureArray[2]), "rule": "Yes", "children": [
+			    		    	      		   {"name": "CCU", "rule": "Yes"}, {"name": "Nurse's Bed", "rule": "No"}]},
+			    		    			{"name": "Nurse's Bed", "rule": "No"}]},			    		    	
+			    		   	]}]
+			    		
+			} else {
+				//                   O
+				//					/ \
+				//                     O
+				//                    / \
+				//                       O
+				//                      / \
+				var data = [
+			    		 	{"name": String(featureArray[0]), "rule":"null", "children": [
+			    		 	     {"name": "CCU", "rule": "Yes"}, {"name": String(featureArray[1]), "children": [
+			    		 	           {"name": "CCU", "rule": "Yes"}, {"name": String(featureArray[2]), "rule": "No", "children": [
+			    		 	                                                 {"name": "CCU", "rule": "Yes"}, {"name": "Nurse's Bed", "rule": "No"}]}
+			    		 	                                                                                                        ]}
+			    		 	]}]
+		     }//end of check
+	      }
+	   }//end of three feature check
+	if (featureArray.length == 2) {
+		if(isNaN(featureArray[1])){
+			//                   O
+			//					/ \
+			//                 O
+			//                / \
+			var data = [
+			            {"name": String(featureArray[0]), "rule": "null", "children": [
+			                 {"name": String(featureArray[1]), "rule": "Yes", "children": [
+			                       {"name": "CCU", "rule": "Yes"}, {"name": "Nurse's Bed", "rule": "No"}]},
+			                 {"name": "Nurse's Bed", "rule": "No"}]
+			            }]
+			} else {
+			//                   O
+			//					/ \
+			//                     O
+			//                    / \	
+			var data = [
+			            {"name": String(featureArray[0]), "rule": "null", "children": [
+			                  {"name": "CCU", "rule": "Yes"}, {"name": String(featureArray[1]), "rule": "No", "children": [
+			                                                       {"name": "CCU", "rule": "Yes"}, {"name": "Nurse's Bed", "rule": "No"}]
+			                  }]
+			            }]
+		}
+	}//end of two feature check
+	if ((featureArray.length == 1)&&((featureArray[0] != "CCU")||(featureArray[0] != "Nurse's Bed"))) {
+		/*var data = [
+		            { "name": String(featureArray[0]), "parent":"null"},
+		            { "name": "CCU", "parent": String(featureArray[0])},
+		            { "name": "Nurse's Bed", "parent": String(featureArray[0])}];*/
+		var data = [
+		    		 { "name": String(featureArray[0]), "rule":"null", "children": [
+							{"name": "CCU", "rule": "Yes"}, {"name": "Nurse's Bed", "rule": "No"}]
+		    		}]	
+	}
+	if ((featureArray[0] == "CCU")||(featureArray[0] == "Nurse's Bed")) {
+		var data = [
+		            { "name": String(featureArray[0]), "parent":"null"}];
+	}
+	//return data, featureArray;
+	return data;
+}
+
+function buildTree (data) {
+	//data = pollData();
+	// *********** Convert flat data into a nice tree ***************
+	// create a name: node map
+	var dataMap = data.reduce(function(map, node) {
+		map[node.name] = node;
+		return map;
+	}, {});
+
+	// create the tree array
+	var treeData = [];
+	data.forEach(function(node) {
+		// add to parent
+		var parent = dataMap[node.parent];
+		if (parent) {
+			// create child array if it doesn't exist
+			(parent.children || (parent.children = []))
+				// add node to child array
+				.push(node);
+		} else {
+			// parent is null or missing
+			treeData.push(node);
+		}
+	});
+
+	// ************** Generate the tree diagram	 *****************
+	var margin = {top: 20, right: 0, bottom: 20, left: 0},
+		//width = 960 - margin.right - margin.left,
+		//height = 700 - margin.top - margin.bottom;
+		width = $("svg").height(),
+		height = $("svg").width(); 
+
+	//var i = 0;
+
+	var tree = d3.layout.tree()
+		.size([height, width]);
+
+	var diagonal = d3.svg.diagonal()
+		.projection(function(d) { return [d.x, d.y]; });
+
+	//var myNode = document.getElementById("graph");
+	var myNode = document.querySelector("svg");
+	while (myNode.firstChild) {
+	    myNode.removeChild(myNode.firstChild);
+	}
+	
+	var svg = d3.select("svg").append("svg")
+		.attr("width", width + 190)
+		.attr("height", height + margin.top + margin.bottom)
+	  	.append("g")
+		.attr("transform", "translate(" + 0 + "," + margin.top + ")");
+
+	/*svg.append("text")
+	.text(function() { return "Accuracy: " + accuracy_1 + " %";})
+	.style("font-size", "16px")
+    .style("font-family", "Verdana")
+	.attr('x', 0)
+	.attr('y', 5);*/
+	
+
+	root = treeData[0];	
+
+	update(root, tree, svg, diagonal);
+
+	setTimeout(function() {
+		//imgGen();
+		//setTimeout(convert, 1000);
+		//convert();
+		//saveSvgAsPng(document.getElementById("graph"), "../Trees/graph.png");
+		buildTree();
+		//window.location.reload();
+	}, 1000);
+}
+
+//buildTree();
+
+function update(source, tree, svg, diagonal) {
+	var i = 0;
+
+  // Compute the new tree layout.
+  var nodes = tree.nodes(root).reverse(),
+	  links = tree.links(nodes);
+
+  // Normalize for fixed-depth.
+  nodes.forEach(function(d) { d.y = d.depth * 80; });
+
+  // Declare the nodes…
+
+
+  var link = svg.selectAll(".link")
+  		.data(links)
+  		.enter()
+  		.append("g")
+  		.attr("class", "link");
+  
+  link.append("path")
+  		.attr("fill", "none")
+  		.attr("stroke", "#33cccc")
+  		.attr("stroke-width", "3px")
+  		.attr("d", diagonal);
+  
+  link.append("text")
+  		.attr("font-family", "Verdana")
+  		.attr("stroke", "#b35900")
+  		.style("font-size", "14px")
+  		.style("fill-opacity", 1)
+  		.attr("transform", function(d){
+  			return "translate(" +
+  					((d.source.x + d.target.x)/2) + "," +
+  					((d.source.y + d.target.y)/2) + ")";
+  		})
+  		.attr("dy", ".35em")
+  		.attr("text-anchor", "middle")
+  		.text(function(d) {
+  			console.log(d.target.rule);
+  			return d.target.rule;
+  		});
+  
+  var node = svg.selectAll("g.node")
+  .data(nodes, function(d) { return d.id || (d.id = ++i); });
+
+	// Enter the nodes.
+	var nodeEnter = node.enter().append("g")
+	  .attr("class", "node")
+	  .attr("transform", function(d) {
+		  return "translate(" + d.x + "," + d.y + ")"; });
+	
+		 nodeEnter.append("circle")
+	  .attr("r", 10)
+	  .style("stroke", "#00777D")
+	  .style("fill", "#fff");
+	
+	nodeEnter.append("text")
+	  .attr("x", function(d) {
+		  return d.children || d._children ? -26 : 26; })
+	  .attr("dy", ".35em")
+	  .style("font-size", "16px")
+	  .style("font-weight", "bold")
+	  .style("font-family", "Verdana")
+	  .attr("text-anchor", function(d) {
+		  return d.children || d._children ? "end" : "start"; })
+	  .text(function(d) { return d.name; })
+	  .style("fill-opacity", 1);
+  
+
+}
+
+
+function getData(filter) {
+
+	var xmlhttp;
+	if (window.XMLHttpRequest) {
+		xmlhttp = new XMLHttpRequest();
+	} else {
+		//for IE6 and IE5
+		xmlhttp = new ActiveXObject("Microsoft.XMLHTTP");
+	}
+
+	xmlhttp.open("get", "DataSender.py?columnfilterString=" + filter, false);
+	xmlhttp.send();
+	return xmlhttp.responseText.trim().replace(/\t\t/g, '\t');
+
+}
+
+
+function updateFFTs(trialData, labelType) {
+
+
+	var lines = trialData.trim().replace(/_/g, " ").split('\n');
+	var header_line = lines[0];
+	var headers = header_line.split('\t');
+	var mostRecentTrialLine = lines[lines.length - 1];
+	var mostRecentTrial_Trees = mostRecentTrialLine.split('\t');
+	var tree_1 = mostRecentTrial_Trees[1].replace(/False/g, "0");
+	var tree_2 = tree_1.replace(/True/g, "1");
+	var tree_3 = tree_2.replace(/\'/g, "\"");
+
+	str = tree_3;
+	testStr = tree_3;
+
+	//var str = '{"cues": Cue("feature3", Cue("feature2", Cue("feature1", 1, 0), 0), 0)}';
+	//var str = '{"cues": Cue("feature2", Cue("feature1", 1, 0), 0)}';
+	//var str = '{"cues": Cue("feature1", 1, 0)}';
+	//var str = '{"cues": 0 }';
+	//var str = '{"cues": 1 }';
+	//window.alert("current str: " + str);
+
+	var cueArray = [];
+	var featureOrder = [];
+
+	if (labelType == "names"){
+		testStr = testStr.replace("{\"cues\": ", "").replace("}", "").replace("Cue(", "").replace("Cue(", "").replace("Cue(", "").replace(")", "").replace(")", "").replace(")", "");
+		testStr = testStr.replace("\"feature3\"", "feature").replace("\"feature2\"", "feature").replace("\"feature1\"", "feature");
+		testStr = testStr.split(",");
+		console.log(testStr);
+		
+		str = str.replace("{\"cues\": ", "").replace("}", "").replace("Cue(", "").replace("Cue(", "").replace("Cue(", "").replace(")", "").replace(")", "").replace(")", "");
+		str = str.replace("\"feature3\"", "Other Conditions").replace("\"feature2\"", "Irregular Heart Rhythm").replace("\"feature1\"", "Chest Pains");
+		str = str.split(",");
+	}
+	//if generic or anything else is returned, just does "feature1", 2" etc...
+	else {
+		testStr = testStr.replace("{\"cues\": ", "").replace("}", "").replace("Cue(", "").replace("Cue(", "").replace("Cue(", "").replace(")", "").replace(")", "").replace(")", "");
+		testStr = testStr.replace("\"feature3\"", "feature").replace("\"feature2\"", "feature").replace("\"feature1\"", "feature");
+		testStr = testStr.split(",");
+		console.log(testStr);
+		
+		str = str.replace("{\"cues\": ", "").replace("}", "").replace("Cue(", "").replace("Cue(", "").replace("Cue(", "").replace(")", "").replace(")", "").replace(")", "");
+		str = str.replace("\"feature3\"", "feature3").replace("\"feature2\"", "feature2").replace("\"feature1\"", "feature1");
+		str = str.split(",");		
+	}
+	
+	findCueStructure = cueStructure(testStr, str);
+	console.log("cueStrucutre" + findCueStructure);
+	
+	var mlFeatureSetComparison = [];
+	var outcomes = [];
+	//console.log(str);
+	if (str.length == 7) {
+		//str = str.replace("{\"cues\": ", "").replace("}", "").replace("Cue(", "").replace("Cue(", "").replace("Cue(", "").replace(")", "").replace(")", "").replace(")", "");
+		//str = str.replace("\"feature3\"", "Other").replace("\"feature2\"", "ST Change").replace("\"feature1\"", "Chest Pains");
+		//console.log(str)
+		
+		switch (findCueStructure){
+			case "1110000":
+				var pair1 = str[0] + ": " + str[6] + ", ";
+				var pair2 = str[1] + ": " + str[5] + ", ";
+				var pair3 = str[2] + ": " + str[3];
+				var allPairs = "{" + pair1 + pair2 + pair3 + "}";
+				mlFeatureSetComparison[0] = (str[0] + "," + "0").toString();
+				mlFeatureSetComparison[1] = (str[0] + "," + "1" + "," + str[1] + "," + "0").toString();
+				mlFeatureSetComparison[2] = (str[0] + "," + "1" + "," + str[1] + "," + "1" + "," + str[2] + "," + "0").toString();
+				mlFeatureSetComparison[3] = (str[0] + "," + "1" + "," + str[1] + "," + "1" + "," + str[2] + "," + "1").toString();
+				outcomes = ["0", "0", "0", "1"];
+		
+				//load the array with values
+				cueArray[0] = str[6];
+				cueArray[1] = str[5];
+				cueArray[2] = str[3];
+				featureOrder[0] = str[0];
+				featureOrder[1] = str[1];
+				featureOrder[2] = str[2];
+				break;
+			case "1010100":
+				var pair1 = str[0] + ": " + str[1] + ", ";
+				var pair2 = str[2] + ": " + str[3] + ", ";
+				var pair3 = str[4] + ": " + str[5];
+				var allPairs = "{" + pair1 + pair2 + pair3 + "}";
+				mlFeatureSetComparison[0] = (str[0] + "," + "1").toString();
+				mlFeatureSetComparison[1] = (str[0] + "," + "0" + "," + str[1] + "," + "1").toString();
+				mlFeatureSetComparison[2] = (str[0] + "," + "0" + "," + str[1] + "," + "0" + "," + str[2] + "," + "1").toString();
+				mlFeatureSetComparison[3] = (str[0] + "," + "0" + "," + str[1] + "," + "0" + "," + str[2] + "," + "0").toString();
+				outcomes = ["0", "0", "1", "0"];
+
+				//load the array with values
+				cueArray[0] = str[1];
+				cueArray[1] = str[3];
+				cueArray[2] = str[5];
+				featureOrder[0] = str[0];
+				featureOrder[1] = str[2];
+				featureOrder[2] = str[4];
+				break;
+			case "1101000":
+				var pair1 = str[0] + ": " + str[6] + ", ";
+				var pair2 = str[1] + ": " + str[2] + ", ";
+				var pair3 = str[3] + ": " + str[4];
+				var allPairs = "{" + pair1 + pair2 + pair3 + "}";		
+				mlFeatureSetComparison[0] = (str[0] + "," + "0").toString();
+				mlFeatureSetComparison[1] = (str[0] + "," + "1" + "," + str[1] + "," + "1").toString();
+				mlFeatureSetComparison[2] = (str[0] + "," + "1" + "," + str[1] + "," + "0" + "," + str[2] + "," + "1").toString();
+				mlFeatureSetComparison[3] = (str[0] + "," + "1" + "," + str[1] + "," + "0" + "," + str[2] + "," + "0").toString();
+				outcomes = ["0", "1", "1", "0"];
+		
+				//load the array with values
+				cueArray[0] = str[6];
+				cueArray[1] = str[2];
+				cueArray[2] = str[4];
+				featureOrder[0] = str[0];
+				featureOrder[1] = str[1];
+				featureOrder[2] = str[3];
+				break;
+			case "1011000":
+				var pair1 = str[0] + ": " + str[1] + ", ";
+				var pair2 = str[2] + ": " + str[6] + ", ";
+				var pair3 = str[3] + ": " + str[4];
+				var allPairs = "{" + pair1 + pair2 + pair3 + "}";
+				mlFeatureSetComparison[0] = (str[0] + "," + "1").toString();
+				mlFeatureSetComparison[1] = (str[0] + "," + "0" + "," + str[1] + "," + "0").toString();
+				mlFeatureSetComparison[2] = (str[0] + "," + "0" + "," + str[1] + "," + "1" + "," + str[2] + "," + "1").toString();
+				mlFeatureSetComparison[3] = (str[0] + "," + "0" + "," + str[1] + "," + "1" + "," + str[2] + "," + "0").toString();
+				outcomes = ["1", "0", "1", "0"];
+		
+				//load the array with values
+				cueArray[0] = str[1];
+				cueArray[1] = str[6];
+				cueArray[2] = str[4];
+				featureOrder[0] = str[0];
+				featureOrder[1] = str[2];
+				featureOrder[2] = str[3];
+				break;
+		}//end of switch
+	} //end of checking for triple feature
+
+	else {
+
+		if (str.length == 5) {
+			//str = str.replace("{\"cues\": ", "").replace("}", "").replace("Cue(", "").replace("Cue(", "").replace("Cue(", "").replace(")", "").replace(")", "").replace(")", "");
+			//str = str.replace("\"feature2\"", "ST Change").replace("\"feature1\"", "Chest Pains");
+			//str = str.split(",");
+			switch (findCueStructure){
+				case "11000":
+					var pair1 = str[0] + ": " + str[4] + ", ";
+					var pair2 = str[1] + ": " + str[2];
+					var allPairs = "{" + pair1 + pair2 + "}";
+					mlFeatureSetComparison[0] = (str[0] + "," + "0").toString();
+					mlFeatureSetComparison[1] = (str[0] + "," + "1" + "," + str[1] + "," + "1").toString();
+					mlFeatureSetComparison[2] = (str[0] + "," + "1" + "," + str[1] + "," + "0").toString();
+					outcomes = ["0", "1", "0"];
+	
+					//load the array with values
+					cueArray[0] = str[4];
+					cueArray[1] = str[2];
+					featureOrder[0] = str[0];
+					featureOrder[1] = str[1];
+					break;
+				case "10100":
+					var pair1 = str[0] + ": " + str[4] + ", ";
+					var pair2 = str[1] + ": " + str[2];
+					var allPairs = "{" + pair1 + pair2 + "}";
+					mlFeatureSetComparison[0] = (str[0] + "," + "1").toString();
+					mlFeatureSetComparison[1] = (str[0] + "," + "0" + "," + str[1] + "," + "1").toString();
+					mlFeatureSetComparison[2] = (str[0] + "," + "0" + "," + str[1] + "," + "0").toString();
+					outcomes = ["1", "1", "0"];
+	
+					//load the array with values
+					cueArray[0] = str[4];
+					cueArray[1] = str[2];
+					featureOrder[0] = str[0];
+					featureOrder[1] = str[1];
+					break;			
+			}
+		}
+		else {
+
+			if (str.length == 3) {
+				//str = str.replace("{\"cues\": ", "").replace("}", "").replace("Cue(", "").replace("Cue(", "").replace("Cue(", "").replace(")", "").replace(")", "").replace(")", "");
+				//str = str.replace("\"feature2\"", "ST Change").replace("\"feature1\"", "Chest Pains");
+				//str = str.split(",");
+				var pair1 = str[0] + ": " + str[1];
+				var allPairs = "{" + pair1 + "}";
+				mlFeatureSetComparison[0] = (str[0] + "," +"1").toString();
+				mlFeatureSetComparison[1] = (str[0] + "," +"0").toString();
+				outcomes = ["1", "0"];
+
+				//load the array with values
+				cueArray[0] = str[1];
+				featureOrder[0] = str[0];
+			}
+			else {
+				//str = str.replace("{", "").replace("}", "");
+				//str = str.split(" ");
+
+				if (str[1] == 1) {
+					featureOrder[0] = "CCU";
+					cueArray[0] = 1;
+					mlFeatureSetComparison[0] = "None, 1";
+					outcomes = ["1"];
+				}
+				else {
+					featureOrder[0] = "Nurse's Bed";
+					cueArray[0] = 0;
+					mlFeatureSetComparison[0] = "None, 0";
+					outcomes = ["0"];
+				}
+
+			}
+		}//end of checking for single feature
+	}//end of checking for double feature
+	console.log("featureORder " + featureOrder);
+	allData = [featureOrder, cueArray, mlFeatureSetComparison, outcomes];
+	
+	return allData;
+	//return featureOrder;
+}
+
+function cueStructure(testStr, str) {
+	var tester = '';
+	for (i = 0; i < testStr.length; i++){
+		if((testStr[i] == "feature")||(testStr[i] == " feature")){
+			tester = tester + "1";
+		} else {
+			tester = tester + "0";
+		}
+	}
+	return tester;	
+}
+
+</script>
+	
+  </body>
+</html>
